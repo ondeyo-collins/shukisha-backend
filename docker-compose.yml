@@ -45,6 +45,9 @@ services:
       PORT: "8080"
       DB_HOST: postgres
       DB_PORT: "5432"
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASS: ${DB_PASS:-postgres}
+      DB_NAME: ${DB_NAME:-shukisha}
       DB_SSLMODE: ${DB_SSLMODE:-disable}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
@@ -68,6 +71,9 @@ services:
     environment:
       DB_HOST: postgres
       DB_PORT: "5432"
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASS: ${DB_PASS:-postgres}
+      DB_NAME: ${DB_NAME:-shukisha}
       DB_SSLMODE: ${DB_SSLMODE:-disable}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
