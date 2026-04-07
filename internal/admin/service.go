@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/shukisha/backend/internal/drivers"
@@ -202,6 +203,9 @@ func (s *AdminService) ListAdmins(ctx context.Context) ([]AdminUserDetail, error
 
 func (s *AdminService) CreateAdmin(ctx context.Context, email, name, role, department, password string) (*AdminUser, error) {
 	var adminUser AdminUser
+	if !IsCanonicalAdminRole(role) {
+		return nil, errors.New("invalid admin role")
+	}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		// 1. Create Identity User (placeholder phone)
 		idUser := identity.User{
@@ -242,6 +246,12 @@ func (s *AdminService) CreateAdmin(ctx context.Context, email, name, role, depar
 }
 
 func (s *AdminService) UpdateAdmin(ctx context.Context, id, role, department, status string) error {
+	if !IsCanonicalAdminRole(role) {
+		return errors.New("invalid admin role")
+	}
+	if !IsCanonicalAdminStatus(status) {
+		return errors.New("invalid admin status")
+	}
 	return s.db.Model(&AdminUser{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"role":       role,
 		"department": department,

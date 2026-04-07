@@ -163,41 +163,41 @@ func main() {
 	http.HandleFunc("/swagger", swagger.SwaggerHandler)
 
 	// Admin Routes (Protected by Admin Middleware)
-	http.HandleFunc("/v1/admin/stats", admin.AdminRequired(db.DB, adminHandler.GetDashboardStats))
+	http.HandleFunc("/v1/admin/stats", admin.RequireAnyRole(db.DB, admin.RoleSuperAdmin, admin.RoleLogistics, admin.RoleTransport, admin.RoleFinance, admin.RoleSupport)(adminHandler.GetDashboardStats))
 	
 	http.HandleFunc("/v1/admin/drivers", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			admin.AdminRequired(db.DB, adminHandler.GetDashboardStats)(w, r) // Fallback placeholder
+			admin.RequireAnyRole(db.DB, admin.RoleTransport)(adminHandler.GetDashboardStats)(w, r) // Fallback placeholder
 		} else {
-			admin.AdminRequired(db.DB, adminHandler.UpdateDriverStatus)(w, r)
+			admin.RequireAnyRole(db.DB, admin.RoleTransport)(adminHandler.UpdateDriverStatus)(w, r)
 		}
 	})
 	http.HandleFunc("/v1/admin/drivers/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/ping") {
-			admin.AdminRequired(db.DB, adminHandler.PingDriver)(w, r)
+			admin.RequireAnyRole(db.DB, admin.RoleTransport)(adminHandler.PingDriver)(w, r)
 		} else {
 			http.NotFound(w, r)
 		}
 	})
 
-	http.HandleFunc("/v1/admin/parcels", admin.AdminRequired(db.DB, adminHandler.GetParcels))
+	http.HandleFunc("/v1/admin/parcels", admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.GetParcels))
 	http.HandleFunc("/v1/admin/parcels/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/override") {
-			admin.AdminRequired(db.DB, adminHandler.OverrideParcel)(w, r)
+			admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.OverrideParcel)(w, r)
 		} else {
 			http.NotFound(w, r)
 		}
 	})
 
-	http.HandleFunc("/v1/admin/fleet/live", admin.AdminRequired(db.DB, adminHandler.GetLiveFleet))
-	http.HandleFunc("/v1/admin/routes", admin.SuperAdminRequired(db.DB, func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/v1/admin/fleet/live", admin.RequireAnyRole(db.DB, admin.RoleTransport)(adminHandler.GetLiveFleet))
+	http.HandleFunc("/v1/admin/routes", admin.RequireAnyRole(db.DB, admin.RoleTransport)(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			adminHandler.CreateRoute(w, r)
 		} else {
 			adminHandler.GetRoutes(w, r)
 		}
 	}))
-	http.HandleFunc("/v1/admin/stops", admin.SuperAdminRequired(db.DB, func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/v1/admin/stops", admin.RequireAnyRole(db.DB, admin.RoleTransport)(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			adminHandler.CreateStop(w, r)
 		} else {
@@ -205,30 +205,30 @@ func main() {
 		}
 	}))
 
-	http.HandleFunc("/v1/admin/ledger/unpaid", admin.AdminRequired(db.DB, adminHandler.GetUnpaidLedger))
-	http.HandleFunc("/v1/admin/payouts/execute", admin.AdminRequired(db.DB, adminHandler.ExecutePayouts))
+	http.HandleFunc("/v1/admin/ledger/unpaid", admin.RequireAnyRole(db.DB, admin.RoleFinance)(adminHandler.GetUnpaidLedger))
+	http.HandleFunc("/v1/admin/payouts/execute", admin.RequireAnyRole(db.DB, admin.RoleFinance)(adminHandler.ExecutePayouts))
 
-	http.HandleFunc("/v1/admin/users/search", admin.AdminRequired(db.DB, adminHandler.SearchUsers))
+	http.HandleFunc("/v1/admin/users/search", admin.RequireAnyRole(db.DB, admin.RoleSupport)(adminHandler.SearchUsers))
 	http.HandleFunc("/v1/admin/users/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/rescue-auth") {
-			admin.AdminRequired(db.DB, adminHandler.RescueAuth)(w, r)
+			admin.RequireAnyRole(db.DB, admin.RoleSupport)(adminHandler.RescueAuth)(w, r)
 		} else {
 			http.NotFound(w, r)
 		}
 	})
 
 	// Super Admin Overseer Route
-	http.HandleFunc("/v1/admin/audit-logs", admin.SuperAdminRequired(db.DB, adminHandler.GetAuditLogs))
+	http.HandleFunc("/v1/admin/audit-logs", admin.RequireAnyRole(db.DB, admin.RoleSuperAdmin)(adminHandler.GetAuditLogs))
 
 	// Administration Management (Super Admin Only)
-	http.HandleFunc("/v1/admin/management", admin.SuperAdminRequired(db.DB, func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/v1/admin/management", admin.RequireAnyRole(db.DB, admin.RoleSuperAdmin)(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			adminHandler.CreateAdmin(w, r)
 		} else {
 			adminHandler.ListAdmins(w, r)
 		}
 	}))
-	http.HandleFunc("/v1/admin/management/", admin.SuperAdminRequired(db.DB, adminHandler.UpdateAdmin))
+	http.HandleFunc("/v1/admin/management/", admin.RequireAnyRole(db.DB, admin.RoleSuperAdmin)(adminHandler.UpdateAdmin))
 
 	// Feedback Routes
 	http.HandleFunc("/v1/ratings", identity.AuthMiddleware(feedbackHandler.SubmitRating))

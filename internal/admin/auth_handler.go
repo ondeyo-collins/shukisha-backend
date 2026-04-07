@@ -53,6 +53,16 @@ func (h *AdminAuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fail fast on misconfigured/suspended admin accounts
+	if adminUser.Status != "ACTIVE" {
+		http.Error(w, "Admin account is not active", http.StatusForbidden)
+		return
+	}
+	if !IsCanonicalAdminRole(adminUser.Role) {
+		http.Error(w, "Admin role misconfigured; contact SUPER_ADMIN", http.StatusForbidden)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(AdminLoginResponse{
 		AccessToken: token,

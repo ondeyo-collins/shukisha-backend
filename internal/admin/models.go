@@ -34,7 +34,7 @@ type ManagementRequest struct {
 type AdminUser struct {
 	ID         uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	UserID     uuid.UUID `gorm:"type:uuid;unique;not null;index" json:"user_id"`
-	Role       string    `gorm:"size:20;default:'ADMIN'" json:"role"`
+	Role       string    `gorm:"size:20;default:'LOGISTICS'" json:"role"`
 	Department string    `gorm:"size:50" json:"department"`
 	Status     string    `gorm:"size:20;default:'ACTIVE'" json:"status"` // ACTIVE, SUSPENDED
 	CreatedAt  int64     `gorm:"autoCreateTime" json:"created_at"`

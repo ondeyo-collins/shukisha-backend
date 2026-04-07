@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Docker Desktop running
-- Go 1.22+
+- Go 1.25+
 - Node.js 20+
 
 ---
@@ -11,8 +11,8 @@
 ## 1. Start Infrastructure (PostgreSQL + Redis)
 
 ```powershell
-# From the project root
-docker-compose up -d
+# From the backend directory
+docker compose up -d
 ```
 
 Expected output:
@@ -27,7 +27,7 @@ Expected output:
 ## 2. Start the Go API Server
 
 ```powershell
-# From the project root
+# From the backend directory
 go run ./cmd/api
 ```
 
@@ -38,6 +38,23 @@ The API will be available at **`http://localhost:8080`**
 > ```powershell
 > Copy-Item .env.example .env
 > ```
+
+---
+
+## 3. Seed a SUPER_ADMIN (one-time)
+
+The API does **AutoMigrate** on startup, but it does **not** automatically create an admin user.
+
+Run this once to create a default SUPER_ADMIN:
+
+```powershell
+# From the backend directory
+go run ./scripts/seed_superadmin.go
+```
+
+This seeds:
+- Email: `superadmin@shukisha.com`
+- Password: `admin123`
 
 ---
 
@@ -57,7 +74,7 @@ The admin dashboard will be available at **`http://localhost:5180`**
 
 | Terminal                 | Command                                       | URL                |
 | ------------------------ | --------------------------------------------- | ------------------ |
-| **Infrastructure** | `docker-compose up -d`                      | —                 |
+| **Infrastructure** | `docker compose up -d`                      | —                 |
 | **API Server**     | `go run ./cmd/api`                          | `localhost:8080` |
 | **Admin UI**       | `cd admin-ui && npm run dev -- --port 5180` | `localhost:5180` |
 
@@ -67,7 +84,7 @@ The admin dashboard will be available at **`http://localhost:5180`**
 
 ```powershell
 # Stop Docker containers (from project root)
-docker-compose down
+docker compose down
 
 # Stop Go server → Ctrl+C in its terminal
 # Stop Admin UI → Ctrl+C in its terminal
@@ -91,13 +108,8 @@ docker-compose down
 ## Login Flow (Admin UI)
 
 1. Navigate to `http://localhost:5180/login`
-2. Enter your registered admin phone number
-3. Enter the 6-digit OTP sent via SMS
-4. You'll be redirected to the dashboard based on your role
+2. Sign in via Email + Password (recommended for admin dashboard)
+3. You'll be redirected to the dashboard based on your role
 
 > 💡 **SUPER_ADMIN** sees the full Dashboard pill with access to all departments.
 > Department users (LOGISTICS, TRANSPORT, FINANCE, SUPPORT) only see their own pill.
->
-> Successfully created SUPER_ADMIN:
-> Email: admin@shukisha.co.ke
-> Password: CHANGE_ME
