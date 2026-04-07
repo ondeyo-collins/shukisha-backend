@@ -19,6 +19,28 @@ func NewAdminHandler(service *AdminService) *AdminHandler {
 	return &AdminHandler{service: service}
 }
 
+func (h *AdminHandler) GetMe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	adminID, ok := r.Context().Value(AdminIDKey).(uuid.UUID)
+	if !ok {
+		http.Error(w, "Unauthorized: missing admin ID", http.StatusUnauthorized)
+		return
+	}
+
+	me, err := h.service.GetCurrentAdmin(r.Context(), adminID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(me)
+}
+
 func (h *AdminHandler) GetDashboardStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -165,6 +187,70 @@ func (h *AdminHandler) ListClaims(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(claims)
+}
+
+func (h *AdminHandler) ListNotifications(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	status := r.URL.Query().Get("status")
+	to := r.URL.Query().Get("to")
+	parcelID := r.URL.Query().Get("parcel_id")
+	limit := parseInt(r.URL.Query().Get("limit"), 50)
+	offset := parseInt(r.URL.Query().Get("offset"), 0)
+
+	if parcelID != "" && !isUUID(parcelID) {
+		http.Error(w, "Invalid parcel_id (must be UUID)", http.StatusBadRequest)
+		return
+	}
+
+	jobs, err := h.service.ListNotificationJobs(r.Context(), ListNotificationJobsParams{
+		Status:   status,
+		To:       to,
+		ParcelID: parcelID,
+		Limit:    limit,
+		Offset:   offset,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(jobs)
+}
+
+func (h *AdminHandler) RetryNotification(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	adminID, ok := r.Context().Value(AdminIDKey).(uuid.UUID)
+	if !ok {
+		http.Error(w, "Unauthorized: missing admin ID", http.StatusUnauthorized)
+		return
+	}
+
+	jobID, ok := extractID(r.URL.Path, "/v1/admin/notifications/", "/retry")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if !isUUID(jobID) {
+		http.Error(w, "Invalid notification ID (must be UUID)", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.service.RetryNotificationJob(r.Context(), jobID, adminID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "Queued"})
 }
 
 func (h *AdminHandler) ParcelClaims(w http.ResponseWriter, r *http.Request) {

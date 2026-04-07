@@ -428,6 +428,94 @@ func (s *AdminService) NotifyParcelDriver(ctx context.Context, parcelID string, 
 	})
 }
 
+type ListNotificationJobsParams struct {
+	Status   string
+	To       string
+	ParcelID string
+	Limit    int
+	Offset   int
+}
+
+func (s *AdminService) ListNotificationJobs(ctx context.Context, params ListNotificationJobsParams) ([]parcels.NotificationJob, error) {
+	var jobs []parcels.NotificationJob
+
+	query := s.db.WithContext(ctx).Model(&parcels.NotificationJob{})
+	if st := strings.TrimSpace(params.Status); st != "" {
+		query = query.Where("status = ?", st)
+	}
+	if to := strings.TrimSpace(params.To); to != "" {
+		query = query.Where(`"to" ILIKE ?`, "%"+to+"%")
+	}
+	if pid := strings.TrimSpace(params.ParcelID); pid != "" {
+		query = query.Where("parcel_id = ?", pid)
+	}
+
+	limit := params.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	offset := params.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	if err := query.Order("created_at desc").Limit(limit).Offset(offset).Find(&jobs).Error; err != nil {
+		return nil, err
+	}
+	return jobs, nil
+}
+
+func (s *AdminService) RetryNotificationJob(ctx context.Context, jobID string, adminID uuid.UUID) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var job parcels.NotificationJob
+		if err := tx.First(&job, "id = ?", jobID).Error; err != nil {
+			return err
+		}
+		if job.Status == "SENT" {
+			return errors.New("notification already sent")
+		}
+
+		updates := map[string]any{
+			"status":          "QUEUED",
+			"attempts":        0,
+			"last_error":      "",
+			"sent_at":         nil,
+			"next_attempt_at": time.Now(),
+		}
+		if err := tx.Model(&parcels.NotificationJob{}).Where("id = ?", job.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+
+		return tx.Create(&AuditEvent{
+			AdminID:  adminID,
+			Action:   "NOTIFICATION_RETRY",
+			EntityID: job.ID.String(),
+			Details:  "channel=" + job.Channel + " to=" + job.To,
+		}).Error
+	})
+}
+
+func (s *AdminService) GetCurrentAdmin(ctx context.Context, adminID uuid.UUID) (*AdminUserDetail, error) {
+	var adminUser AdminUser
+	if err := s.db.WithContext(ctx).First(&adminUser, "id = ?", adminID).Error; err != nil {
+		return nil, err
+	}
+
+	var cred AdminCredential
+	_ = s.db.WithContext(ctx).Where("admin_user_id = ?", adminUser.ID).First(&cred).Error
+
+	return &AdminUserDetail{
+		ID:         adminUser.ID,
+		UserID:     adminUser.UserID,
+		Email:      cred.Email,
+		Name:       firstNonEmpty(cred.Name, cred.Email),
+		Role:       adminUser.Role,
+		Department: adminUser.Department,
+		Status:     adminUser.Status,
+		CreatedAt:  adminUser.CreatedAt,
+	}, nil
+}
+
 func (s *AdminService) OverrideParcel(ctx context.Context, parcelID string, adminID uuid.UUID, reason string) error {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
@@ -460,6 +548,15 @@ func (s *AdminService) OverrideParcel(ctx context.Context, parcelID string, admi
 			Details:  reason,
 		}).Error
 	})
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func (s *AdminService) CreateParcelClaim(ctx context.Context, parcelID string, adminID uuid.UUID, claimType string, description string) (*parcels.ParcelClaim, error) {
