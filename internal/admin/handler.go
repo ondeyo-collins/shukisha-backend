@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 
@@ -92,11 +93,25 @@ func (h *AdminHandler) GetParcelExceptions(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	q := r.URL.Query().Get("q")
+	status := r.URL.Query().Get("status")
+	routeID := r.URL.Query().Get("route_id")
+	driverID := r.URL.Query().Get("driver_id")
 	slaHours := parseInt(r.URL.Query().Get("sla_hours"), 8)
 	limit := parseInt(r.URL.Query().Get("limit"), 50)
 	offset := parseInt(r.URL.Query().Get("offset"), 0)
+	onlyUnassigned := r.URL.Query().Get("only_unassigned") == "1"
 
-	ps, err := h.service.GetParcelExceptions(r.Context(), slaHours, limit, offset)
+	ps, err := h.service.GetParcelExceptions(r.Context(), GetParcelExceptionsParams{
+		Query:          q,
+		Status:         status,
+		RouteID:        routeID,
+		DriverID:       driverID,
+		OnlyUnassigned: onlyUnassigned,
+		SLAHours:       slaHours,
+		Limit:          limit,
+		Offset:         offset,
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -211,6 +226,100 @@ func (h *AdminHandler) UpdateClaim(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "Updated"})
+}
+
+func (h *AdminHandler) ClaimAttachments(w http.ResponseWriter, r *http.Request) {
+	adminID, ok := r.Context().Value(AdminIDKey).(uuid.UUID)
+	if !ok {
+		http.Error(w, "Unauthorized: missing admin ID", http.StatusUnauthorized)
+		return
+	}
+
+	claimID, ok := extractID(r.URL.Path, "/v1/admin/claims/", "/attachments")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		metas, err := h.service.ListClaimAttachments(r.Context(), claimID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(metas)
+	case http.MethodPost:
+		// Limit request to 3MB (MVP evidence uploads only).
+		r.Body = http.MaxBytesReader(w, r.Body, 3<<20)
+		if err := r.ParseMultipartForm(3 << 20); err != nil {
+			http.Error(w, "Invalid multipart form", http.StatusBadRequest)
+			return
+		}
+
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "Missing file", http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+
+		// Read up to 2MB actual file bytes.
+		const maxFileSize = 2 << 20
+		data, err := io.ReadAll(io.LimitReader(file, maxFileSize+1))
+		if err != nil {
+			http.Error(w, "Failed to read file", http.StatusBadRequest)
+			return
+		}
+		if len(data) > maxFileSize {
+			http.Error(w, "File too large (max 2MB)", http.StatusBadRequest)
+			return
+		}
+
+		mimeType := header.Header.Get("Content-Type")
+		meta, err := h.service.AddClaimAttachment(r.Context(), claimID, adminID, header.Filename, mimeType, data)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(meta)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *AdminHandler) DownloadClaimAttachment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	_, ok := r.Context().Value(AdminIDKey).(uuid.UUID)
+	if !ok {
+		http.Error(w, "Unauthorized: missing admin ID", http.StatusUnauthorized)
+		return
+	}
+
+	attachmentID, ok := extractID(r.URL.Path, "/v1/admin/claims/attachments/", "/download")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	a, err := h.service.GetClaimAttachment(r.Context(), attachmentID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", a.MimeType)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+a.FileName+`"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(a.Content)
 }
 
 func (h *AdminHandler) GetParcelDetail(w http.ResponseWriter, r *http.Request) {

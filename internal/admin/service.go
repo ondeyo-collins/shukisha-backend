@@ -173,47 +173,145 @@ func (s *AdminService) GetParcels(ctx context.Context, params GetParcelsParams) 
 	out := make([]AdminParcelSummary, 0, len(results))
 	for _, p := range results {
 		summary := parcelToAdminSummary(p)
+		lastActivityAt := p.CreatedAt
+		if !p.UpdatedAt.IsZero() {
+			lastActivityAt = p.UpdatedAt
+		}
 		if le, ok := lastByParcel[p.ID]; ok {
 			summary.LastEventAt = &le.CreatedAt
 			summary.LastEventType = le.EventType
+			lastActivityAt = le.CreatedAt
 		}
-		summary.SlaBreached = time.Since(p.CreatedAt) >= time.Duration(slaHours)*time.Hour && p.Status != "DELIVERED"
+		summary.SlaBreached = time.Since(lastActivityAt) >= time.Duration(slaHours)*time.Hour && p.Status != "DELIVERED"
 		out = append(out, summary)
 	}
 	return out, nil
 }
 
-func (s *AdminService) GetParcelExceptions(ctx context.Context, slaHours int, limit int, offset int) ([]AdminParcelSummary, error) {
+type GetParcelExceptionsParams struct {
+	Query          string
+	Status         string
+	RouteID        string
+	DriverID       string
+	OnlyUnassigned bool
+	SLAHours       int
+	Limit          int
+	Offset         int
+}
+
+func (s *AdminService) GetParcelExceptions(ctx context.Context, params GetParcelExceptionsParams) ([]AdminParcelSummary, error) {
+	slaHours := params.SLAHours
 	if slaHours <= 0 {
 		slaHours = 8
 	}
+	limit := params.Limit
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	offset := params.Offset
 	if offset < 0 {
 		offset = 0
 	}
 
 	cutoff := time.Now().Add(-time.Duration(slaHours) * time.Hour)
 
-	var results []parcels.Parcel
-	err := s.db.WithContext(ctx).
-		Model(&parcels.Parcel{}).
-		Preload("Payment").
-		Where("status <> ?", "DELIVERED").
-		Where("created_at <= ?", cutoff).
-		Order("created_at asc").
-		Limit(limit).
-		Offset(offset).
-		Find(&results).Error
-	if err != nil {
+	type row struct {
+		ID            uuid.UUID  `gorm:"column:id"`
+		SenderID      uuid.UUID  `gorm:"column:sender_id"`
+		DriverID      *uuid.UUID `gorm:"column:driver_id"`
+		ReceiverPhone string     `gorm:"column:receiver_phone"`
+		Description   string     `gorm:"column:description"`
+		DeclaredValue float64    `gorm:"column:declared_value"`
+		Status        string     `gorm:"column:status"`
+		RouteID       uuid.UUID  `gorm:"column:route_id"`
+		CreatedAt     time.Time  `gorm:"column:created_at"`
+		UpdatedAt     time.Time  `gorm:"column:updated_at"`
+		PaymentAmount *float64   `gorm:"column:payment_amount"`
+		PaymentStatus *string    `gorm:"column:payment_status"`
+		LastEventAt   *time.Time `gorm:"column:last_event_at"`
+		LastEventType *string    `gorm:"column:last_event_type"`
+	}
+
+	where := []string{
+		"p.status <> 'DELIVERED'",
+		"COALESCE(le.created_at, p.updated_at, p.created_at) <= ?",
+	}
+	args := []any{cutoff}
+
+	if st := strings.TrimSpace(params.Status); st != "" {
+		where = append(where, "p.status = ?")
+		args = append(args, st)
+	}
+	if rid := strings.TrimSpace(params.RouteID); rid != "" {
+		where = append(where, "p.route_id = ?")
+		args = append(args, rid)
+	}
+	if did := strings.TrimSpace(params.DriverID); did != "" {
+		where = append(where, "p.driver_id = ?")
+		args = append(args, did)
+	}
+	if params.OnlyUnassigned {
+		where = append(where, "p.driver_id IS NULL")
+	}
+	if q := strings.TrimSpace(params.Query); q != "" {
+		where = append(where, "(CAST(p.id AS TEXT) ILIKE ? OR p.receiver_phone ILIKE ?)")
+		args = append(args, q+"%", "%"+q+"%")
+	}
+
+	sql := `
+		WITH last_events AS (
+			SELECT DISTINCT ON (parcel_id) parcel_id, event_type, created_at
+			FROM parcel_tracking_events
+			ORDER BY parcel_id, created_at DESC
+		)
+		SELECT
+			p.id, p.sender_id, p.driver_id, p.receiver_phone, p.description, p.declared_value, p.status, p.route_id, p.created_at, p.updated_at,
+			pay.amount AS payment_amount, pay.status AS payment_status,
+			le.created_at AS last_event_at, le.event_type AS last_event_type
+		FROM parcels p
+		LEFT JOIN payments pay ON pay.parcel_id = p.id
+		LEFT JOIN last_events le ON le.parcel_id = p.id
+		WHERE ` + strings.Join(where, " AND ") + `
+		ORDER BY COALESCE(le.created_at, p.updated_at, p.created_at) ASC
+		LIMIT ? OFFSET ?
+	`
+	args = append(args, limit, offset)
+
+	var rows []row
+	if err := s.db.WithContext(ctx).Raw(sql, args...).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 
-	out := make([]AdminParcelSummary, 0, len(results))
-	for _, p := range results {
-		summary := parcelToAdminSummary(p)
-		summary.SlaBreached = true
+	out := make([]AdminParcelSummary, 0, len(rows))
+	for _, r := range rows {
+		var pay *AdminPaymentSummary
+		if r.PaymentStatus != nil {
+			amt := 0.0
+			if r.PaymentAmount != nil {
+				amt = *r.PaymentAmount
+			}
+			pay = &AdminPaymentSummary{Amount: amt, Status: *r.PaymentStatus}
+		}
+
+		summary := AdminParcelSummary{
+			ID:            r.ID,
+			SenderID:      r.SenderID,
+			DriverID:      r.DriverID,
+			ReceiverPhone: r.ReceiverPhone,
+			Description:   r.Description,
+			DeclaredValue: r.DeclaredValue,
+			Status:        r.Status,
+			RouteID:       r.RouteID,
+			CreatedAt:     r.CreatedAt,
+			UpdatedAt:     r.UpdatedAt,
+			Payment:       pay,
+			LastEventAt:   r.LastEventAt,
+			AgeMinutes:    int(time.Since(r.CreatedAt).Minutes()),
+			SlaBreached:   true,
+		}
+		if r.LastEventType != nil {
+			summary.LastEventType = *r.LastEventType
+		}
 		out = append(out, summary)
 	}
 	return out, nil
@@ -453,6 +551,87 @@ func (s *AdminService) UpdateClaimStatus(ctx context.Context, claimID string, ad
 			Details:  "status=" + status,
 		}).Error
 	})
+}
+
+type ClaimAttachmentMeta struct {
+	ID        uuid.UUID `json:"id"`
+	ClaimID   uuid.UUID `json:"claim_id"`
+	FileName  string    `json:"file_name"`
+	MimeType  string    `json:"mime_type"`
+	SizeBytes int64     `json:"size_bytes"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (s *AdminService) ListClaimAttachments(ctx context.Context, claimID string) ([]ClaimAttachmentMeta, error) {
+	var metas []ClaimAttachmentMeta
+	err := s.db.WithContext(ctx).
+		Model(&parcels.ParcelClaimAttachment{}).
+		Select("id, claim_id, file_name, mime_type, size_bytes, created_at").
+		Where("claim_id = ?", claimID).
+		Order("created_at desc").
+		Scan(&metas).Error
+	return metas, err
+}
+
+func (s *AdminService) AddClaimAttachment(ctx context.Context, claimID string, adminID uuid.UUID, fileName string, mimeType string, content []byte) (*ClaimAttachmentMeta, error) {
+	fileName = strings.TrimSpace(fileName)
+	mimeType = strings.TrimSpace(mimeType)
+	if fileName == "" {
+		return nil, errors.New("file_name is required")
+	}
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	if len(content) == 0 {
+		return nil, errors.New("file content is required")
+	}
+
+	var created parcels.ParcelClaimAttachment
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var claim parcels.ParcelClaim
+		if err := tx.First(&claim, "id = ?", claimID).Error; err != nil {
+			return err
+		}
+
+		created = parcels.ParcelClaimAttachment{
+			ClaimID:           claim.ID,
+			UploadedByAdminID: adminID,
+			FileName:          fileName,
+			MimeType:          mimeType,
+			SizeBytes:         int64(len(content)),
+			Content:           content,
+		}
+		if err := tx.Create(&created).Error; err != nil {
+			return err
+		}
+
+		return tx.Create(&AuditEvent{
+			AdminID:  adminID,
+			Action:   "PARCEL_CLAIM_ATTACHMENT_ADD",
+			EntityID: created.ID.String(),
+			Details:  "claim_id=" + claim.ID.String() + " file=" + fileName,
+		}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &ClaimAttachmentMeta{
+		ID:        created.ID,
+		ClaimID:   created.ClaimID,
+		FileName:  created.FileName,
+		MimeType:  created.MimeType,
+		SizeBytes: created.SizeBytes,
+		CreatedAt: created.CreatedAt,
+	}, nil
+}
+
+func (s *AdminService) GetClaimAttachment(ctx context.Context, attachmentID string) (*parcels.ParcelClaimAttachment, error) {
+	var a parcels.ParcelClaimAttachment
+	if err := s.db.WithContext(ctx).First(&a, "id = ?", attachmentID).Error; err != nil {
+		return nil, err
+	}
+	return &a, nil
 }
 
 // Transport Admin Logic

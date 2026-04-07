@@ -44,6 +44,7 @@ func main() {
 		&parcels.Payment{},
 		&parcels.ParcelNote{},
 		&parcels.ParcelClaim{},
+		&parcels.ParcelClaimAttachment{},
 		&admin.AdminUser{},
 		&admin.AdminCredential{},
 		&admin.AuditEvent{},
@@ -203,7 +204,14 @@ func main() {
 	})
 
 	http.HandleFunc("/v1/admin/claims", admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.ListClaims))
-	http.HandleFunc("/v1/admin/claims/", admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.UpdateClaim))
+	http.HandleFunc("/v1/admin/claims/attachments/", admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.DownloadClaimAttachment))
+	http.HandleFunc("/v1/admin/claims/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/attachments") {
+			admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.ClaimAttachments)(w, r)
+		} else {
+			admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.UpdateClaim)(w, r)
+		}
+	})
 
 	http.HandleFunc("/v1/admin/fleet/live", admin.RequireAnyRole(db.DB, admin.RoleTransport)(adminHandler.GetLiveFleet))
 	http.HandleFunc("/v1/admin/routes", admin.RequireAnyRole(db.DB, admin.RoleTransport)(func(w http.ResponseWriter, r *http.Request) {
