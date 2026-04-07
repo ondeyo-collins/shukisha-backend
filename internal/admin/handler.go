@@ -71,6 +71,15 @@ func (h *AdminHandler) GetParcels(w http.ResponseWriter, r *http.Request) {
 	offset := parseInt(r.URL.Query().Get("offset"), 0)
 	slaHours := parseInt(r.URL.Query().Get("sla_hours"), 8)
 
+	if routeID != "" && !isUUID(routeID) {
+		http.Error(w, "Invalid route_id (must be UUID)", http.StatusBadRequest)
+		return
+	}
+	if driverID != "" && !isUUID(driverID) {
+		http.Error(w, "Invalid driver_id (must be UUID)", http.StatusBadRequest)
+		return
+	}
+
 	ps, err := h.service.GetParcels(r.Context(), GetParcelsParams{
 		Status:   status,
 		Query:    q,
@@ -103,6 +112,15 @@ func (h *AdminHandler) GetParcelExceptions(w http.ResponseWriter, r *http.Reques
 	limit := parseInt(r.URL.Query().Get("limit"), 50)
 	offset := parseInt(r.URL.Query().Get("offset"), 0)
 	onlyUnassigned := r.URL.Query().Get("only_unassigned") == "1"
+
+	if routeID != "" && !isUUID(routeID) {
+		http.Error(w, "Invalid route_id (must be UUID)", http.StatusBadRequest)
+		return
+	}
+	if driverID != "" && !isUUID(driverID) {
+		http.Error(w, "Invalid driver_id (must be UUID)", http.StatusBadRequest)
+		return
+	}
 
 	ps, err := h.service.GetParcelExceptions(r.Context(), GetParcelExceptionsParams{
 		Query:          q,
@@ -162,6 +180,10 @@ func (h *AdminHandler) ParcelClaims(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !isUUID(parcelID) {
+		http.Error(w, "Invalid parcel ID (must be UUID)", http.StatusBadRequest)
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet:
@@ -211,6 +233,10 @@ func (h *AdminHandler) UpdateClaim(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !isUUID(claimID) {
+		http.Error(w, "Invalid claim ID (must be UUID)", http.StatusBadRequest)
+		return
+	}
 
 	var req struct {
 		Status          string `json:"status"`
@@ -240,6 +266,10 @@ func (h *AdminHandler) ClaimAttachments(w http.ResponseWriter, r *http.Request) 
 	claimID, ok := extractID(r.URL.Path, "/v1/admin/claims/", "/attachments")
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	if !isUUID(claimID) {
+		http.Error(w, "Invalid claim ID (must be UUID)", http.StatusBadRequest)
 		return
 	}
 
@@ -311,6 +341,10 @@ func (h *AdminHandler) DownloadClaimAttachment(w http.ResponseWriter, r *http.Re
 		http.NotFound(w, r)
 		return
 	}
+	if !isUUID(attachmentID) {
+		http.Error(w, "Invalid attachment ID (must be UUID)", http.StatusBadRequest)
+		return
+	}
 
 	a, err := h.service.GetClaimAttachment(r.Context(), attachmentID)
 	if err != nil {
@@ -361,6 +395,10 @@ func (h *AdminHandler) GetParcelDetail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !isUUID(parcelID) {
+		http.Error(w, "Invalid parcel ID (must be UUID)", http.StatusBadRequest)
+		return
+	}
 
 	detail, err := h.service.GetParcelDetail(r.Context(), parcelID)
 	if err != nil {
@@ -381,6 +419,10 @@ func (h *AdminHandler) GetParcelEvents(w http.ResponseWriter, r *http.Request) {
 	parcelID, ok := extractID(r.URL.Path, "/v1/admin/parcels/", "/events")
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	if !isUUID(parcelID) {
+		http.Error(w, "Invalid parcel ID (must be UUID)", http.StatusBadRequest)
 		return
 	}
 
@@ -409,6 +451,10 @@ func (h *AdminHandler) AddParcelNote(w http.ResponseWriter, r *http.Request) {
 	parcelID, ok := extractID(r.URL.Path, "/v1/admin/parcels/", "/notes")
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	if !isUUID(parcelID) {
+		http.Error(w, "Invalid parcel ID (must be UUID)", http.StatusBadRequest)
 		return
 	}
 
@@ -446,6 +492,10 @@ func (h *AdminHandler) NotifyDriver(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !isUUID(parcelID) {
+		http.Error(w, "Invalid parcel ID (must be UUID)", http.StatusBadRequest)
+		return
+	}
 
 	var req struct {
 		Message string `json:"message"`
@@ -476,6 +526,10 @@ func (h *AdminHandler) OverrideParcel(w http.ResponseWriter, r *http.Request) {
 	parcelID, ok := extractID(r.URL.Path, "/v1/admin/parcels/", "/override")
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	if !isUUID(parcelID) {
+		http.Error(w, "Invalid parcel ID (must be UUID)", http.StatusBadRequest)
 		return
 	}
 
@@ -529,6 +583,11 @@ func parseInt(raw string, fallback int) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+func isUUID(raw string) bool {
+	_, err := uuid.Parse(strings.TrimSpace(raw))
+	return err == nil
 }
 
 // Transport Admins
