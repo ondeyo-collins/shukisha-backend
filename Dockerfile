@@ -1,4 +1,4 @@
-FROM golang:1.21-alpine AS build
+FROM golang:1.25-alpine AS build
 
 WORKDIR /src
 
@@ -8,6 +8,7 @@ RUN go mod download
 COPY . .
 
 ENV CGO_ENABLED=0
+RUN go mod tidy
 RUN go build -trimpath -ldflags="-s -w" -o /out/shukisha-api ./cmd/api
 RUN go build -trimpath -ldflags="-s -w" -o /out/shukisha-worker ./cmd/worker
 
@@ -22,4 +23,3 @@ COPY --from=build /out/shukisha-worker /app/shukisha-worker
 COPY docs/openapi.yaml /app/docs/openapi.yaml
 
 EXPOSE 8080
-
