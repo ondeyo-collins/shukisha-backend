@@ -1,0 +1,49 @@
+package parcels
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+type Parcel struct {
+	ID                 uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	SenderID           uuid.UUID `gorm:"type:uuid;not null" json:"sender_id"`
+	DriverID           *uuid.UUID `gorm:"type:uuid" json:"driver_id"`
+	ReceiverPhone      string    `gorm:"size:20;not null" json:"receiver_phone"`
+	Description        string    `gorm:"type:text" json:"description"`
+	DeclaredValue      float64   `gorm:"type:decimal(12,2)" json:"declared_value"`
+	Status             string    `gorm:"size:20;default:'DRAFT'" json:"status"`
+	PickupOTP          string    `gorm:"size:6" json:"pickup_otp"`
+	DeliveryOTP        string    `gorm:"size:6" json:"delivery_otp"`
+	RouteID            uuid.UUID `gorm:"type:uuid;not null" json:"route_id"`
+	TrackingEvents     []ParcelTrackingEvent `gorm:"foreignKey:ParcelID" json:"tracking_events"`
+	Payment            *Payment  `gorm:"foreignKey:ParcelID" json:"payment"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+type ParcelTrackingEvent struct {
+	ID        uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	ParcelID  uuid.UUID `gorm:"type:uuid;not null" json:"parcel_id"`
+	EventType string    `gorm:"size:50;not null" json:"event_type"` // BOOKED, PAID, PICKED_UP, IN_TRANSIT, DELIVERED
+	Location  string    `gorm:"type:geography(POINT, 4326)" json:"location"`
+	Remarks   string    `gorm:"type:text" json:"remarks"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type Payment struct {
+	ID          uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	ParcelID    uuid.UUID `gorm:"type:uuid;not null" json:"parcel_id"`
+	Amount      float64   `gorm:"type:decimal(12,2)" json:"amount"`
+	ProviderRef string    `gorm:"size:100" json:"provider_ref"` // e.g. M-Pesa Code
+	Status      string    `gorm:"size:20;default:'PENDING'" json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type BookParcelRequest struct {
+	RouteID       string  `json:"route_id"`
+	ReceiverPhone string  `json:"receiver_phone"`
+	Description   string  `json:"description"`
+	DeclaredValue float64 `json:"declared_value"`
+}

@@ -1,0 +1,229 @@
+openapi: 3.0.3
+info:
+  title: Shukisha API
+  description: Smart Matatu Stop & Parcel Platform MVP API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080/v1
+    description: Local development
+  - url: https://api.shukisha.com/v1
+    description: Production server
+
+paths:
+  /auth/otp/request:
+    post:
+      summary: Request an OTP for authentication
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phone: { type: string, example: "+254700000000" }
+      responses:
+        '202': { description: OTP request accepted }
+
+  /auth/otp/verify:
+    post:
+      summary: Verify OTP and issue tokens
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phone: { type: string }
+                code: { type: string, example: "123456" }
+      responses:
+        '200':
+          description: Auth successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+
+  /routes/search:
+    get:
+      summary: Search for Matatu routes
+      tags: [Routes]
+      parameters:
+        - name: query
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: List of matching routes
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Route' }
+
+  /routes/{id}:
+    get:
+      summary: Get route details by ID
+      tags: [Routes]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Route details
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Route' }
+
+  /stops/nearest:
+    get:
+      summary: Search for nearest stops
+      tags: [Routes]
+      parameters:
+        - name: lat
+          in: query
+          required: true
+          schema: { type: number }
+        - name: lng
+          in: query
+          required: true
+          schema: { type: number }
+      responses:
+        '200':
+          description: List of nearest stops
+
+  /driver/onboarding:
+    post:
+      summary: Driver profile onboarding
+      tags: [Driver]
+      security: [{ BearerAuth: [] }]
+      responses:
+        '201': { description: Onboarding success }
+
+  /driver/session/start:
+    post:
+      summary: Start driver session (Go Online)
+      tags: [Driver]
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200': { description: Session started }
+
+  /driver/session/stop:
+    post:
+      summary: Stop driver session (Go Offline)
+      tags: [Driver]
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200': { description: Session stopped }
+
+  /driver/session/heartbeat:
+    post:
+      summary: Update driver location
+      tags: [Driver]
+      security: [{ BearerAuth: [] }]
+      responses:
+        '204': { description: Heartbeat ok }
+
+  /stop-alerts:
+    post:
+      summary: Create stop alert
+      tags: [Alerts]
+      security: [{ BearerAuth: [] }]
+      responses:
+        '201': { description: Alert created }
+
+  /stop-alerts/active:
+    get:
+      summary: List my active alerts
+      tags: [Alerts]
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200': { description: Active alerts list }
+
+  /parcels:
+    post:
+      summary: Book a parcel
+      tags: [Parcels]
+      security: [{ BearerAuth: [] }]
+      responses:
+        '201': { description: Parcel booked }
+
+  /parcels/{id}:
+    get:
+      summary: Track parcel status
+      tags: [Parcels]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Parcel status info }
+
+  /payments/callback:
+    post:
+      summary: Payment provider callback hook
+      tags: [Parcels]
+      responses:
+        '200': { description: Callback processed }
+
+  /admin/stats:
+    get:
+      summary: Get dashboard statistics
+      tags: [Admin]
+      responses:
+        '200':
+          description: Statistics summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DashboardStats' }
+
+  /admin/drivers:
+    post:
+      summary: Update driver active status
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entity_id: { type: string, format: uuid }
+                action: { type: string, enum: [APPROVE, SUSPEND] }
+      responses:
+        '200': { description: Driver status updated }
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Route:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        short_name: { type: string }
+    Stop:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        location: { type: string }
+    DashboardStats:
+      type: object
+      properties:
+        total_users: { type: integer }
+        active_drivers: { type: integer }
+        active_parcels: { type: integer }
+        total_routes: { type: integer }
+        total_revenue: { type: number }
