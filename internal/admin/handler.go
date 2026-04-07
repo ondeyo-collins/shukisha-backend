@@ -41,6 +41,36 @@ func (h *AdminHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(me)
 }
 
+func (h *AdminHandler) ChangeMyPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	adminID, ok := r.Context().Value(AdminIDKey).(uuid.UUID)
+	if !ok {
+		http.Error(w, "Unauthorized: missing admin ID", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.service.ChangeMyPassword(r.Context(), adminID, req.CurrentPassword, req.NewPassword); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "Updated"})
+}
+
 func (h *AdminHandler) GetDashboardStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -220,6 +250,22 @@ func (h *AdminHandler) ListNotifications(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(jobs)
+}
+
+func (h *AdminHandler) GetNotificationCounts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	counts, err := h.service.GetNotificationCounts(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(counts)
 }
 
 func (h *AdminHandler) RetryNotification(w http.ResponseWriter, r *http.Request) {

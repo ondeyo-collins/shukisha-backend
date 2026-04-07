@@ -168,6 +168,7 @@ func main() {
 
 	// Admin Routes (Protected by Admin Middleware)
 	http.HandleFunc("/v1/admin/me", admin.RequireAnyRole(db.DB, admin.RoleSuperAdmin, admin.RoleLogistics, admin.RoleTransport, admin.RoleFinance, admin.RoleSupport)(adminHandler.GetMe))
+	http.HandleFunc("/v1/admin/me/password", admin.RequireAnyRole(db.DB, admin.RoleSuperAdmin, admin.RoleLogistics, admin.RoleTransport, admin.RoleFinance, admin.RoleSupport)(adminHandler.ChangeMyPassword))
 	http.HandleFunc("/v1/admin/stats", admin.RequireAnyRole(db.DB, admin.RoleSuperAdmin, admin.RoleLogistics, admin.RoleTransport, admin.RoleFinance, admin.RoleSupport)(adminHandler.GetDashboardStats))
 
 	http.HandleFunc("/v1/admin/drivers", func(w http.ResponseWriter, r *http.Request) {
@@ -216,6 +217,7 @@ func main() {
 	})
 
 	http.HandleFunc("/v1/admin/notifications", admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.ListNotifications))
+	http.HandleFunc("/v1/admin/notifications/counts", admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.GetNotificationCounts))
 	http.HandleFunc("/v1/admin/notifications/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/retry") {
 			admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.RetryNotification)(w, r)

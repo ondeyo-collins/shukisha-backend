@@ -436,6 +436,12 @@ type ListNotificationJobsParams struct {
 	Offset   int
 }
 
+type NotificationCounts struct {
+	Queued int64 `json:"queued"`
+	Failed int64 `json:"failed"`
+	Total  int64 `json:"total"`
+}
+
 func (s *AdminService) ListNotificationJobs(ctx context.Context, params ListNotificationJobsParams) ([]parcels.NotificationJob, error) {
 	var jobs []parcels.NotificationJob
 
@@ -463,6 +469,34 @@ func (s *AdminService) ListNotificationJobs(ctx context.Context, params ListNoti
 		return nil, err
 	}
 	return jobs, nil
+}
+
+func (s *AdminService) GetNotificationCounts(ctx context.Context) (*NotificationCounts, error) {
+	type row struct {
+		Status string `gorm:"column:status"`
+		Count  int64  `gorm:"column:count"`
+	}
+	var rows []row
+	if err := s.db.WithContext(ctx).
+		Model(&parcels.NotificationJob{}).
+		Select("status, COUNT(*) as count").
+		Where("status IN ?", []string{"QUEUED", "FAILED"}).
+		Group("status").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	out := &NotificationCounts{}
+	for _, r := range rows {
+		switch strings.ToUpper(strings.TrimSpace(r.Status)) {
+		case "QUEUED":
+			out.Queued = r.Count
+		case "FAILED":
+			out.Failed = r.Count
+		}
+	}
+	out.Total = out.Queued + out.Failed
+	return out, nil
 }
 
 func (s *AdminService) RetryNotificationJob(ctx context.Context, jobID string, adminID uuid.UUID) error {
@@ -514,6 +548,46 @@ func (s *AdminService) GetCurrentAdmin(ctx context.Context, adminID uuid.UUID) (
 		Status:     adminUser.Status,
 		CreatedAt:  adminUser.CreatedAt,
 	}, nil
+}
+
+func (s *AdminService) ChangeMyPassword(ctx context.Context, adminID uuid.UUID, currentPassword string, newPassword string) error {
+	currentPassword = strings.TrimSpace(currentPassword)
+	newPassword = strings.TrimSpace(newPassword)
+	if currentPassword == "" || newPassword == "" {
+		return errors.New("current_password and new_password are required")
+	}
+	if len(newPassword) < 8 {
+		return errors.New("new_password must be at least 8 characters")
+	}
+
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var cred AdminCredential
+		if err := tx.Where("admin_user_id = ?", adminID).First(&cred).Error; err != nil {
+			return err
+		}
+
+		if err := bcrypt.CompareHashAndPassword([]byte(cred.PasswordHash), []byte(currentPassword)); err != nil {
+			return errors.New("current password is incorrect")
+		}
+
+		hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+		if err != nil {
+			return err
+		}
+
+		if err := tx.Model(&AdminCredential{}).
+			Where("id = ?", cred.ID).
+			Update("password_hash", string(hash)).Error; err != nil {
+			return err
+		}
+
+		return tx.Create(&AuditEvent{
+			AdminID:  adminID,
+			Action:   "ADMIN_PASSWORD_CHANGE",
+			EntityID: adminID.String(),
+			Details:  "",
+		}).Error
+	})
 }
 
 func (s *AdminService) OverrideParcel(ctx context.Context, parcelID string, adminID uuid.UUID, reason string) error {
