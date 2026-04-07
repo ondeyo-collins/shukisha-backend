@@ -32,6 +32,24 @@ cp .env.example .env
    ```
    *Note: Ensure the `.env` file is in the same directory as the binary.*
 
+## 3b. Backend Deployment (Docker Compose - Recommended)
+This runs Postgres (with PostGIS + pgcrypto), Redis, the API, and the worker on one server.
+
+```bash
+cd backend
+cp .env.example .env
+# edit .env (JWT_SECRET, etc)
+docker compose up -d --build
+```
+
+Notes:
+- For Docker Compose, keep `DB_SSLMODE=disable` (the included Postgres container does not use SSL by default).
+
+Health check:
+```bash
+curl http://localhost:8080/health
+```
+
 ## 4. Frontend Deployment (SvelteKit)
 1. **Install dependencies**:
    ```bash
