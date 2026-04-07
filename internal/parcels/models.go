@@ -50,6 +50,36 @@ type ParcelNote struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type ParcelClaimType string
+type ParcelClaimStatus string
+
+const (
+	ParcelClaimTypeLost           ParcelClaimType = "LOST"
+	ParcelClaimTypeDamaged        ParcelClaimType = "DAMAGED"
+	ParcelClaimTypeDelayed        ParcelClaimType = "DELAYED"
+	ParcelClaimTypeWrongRecipient ParcelClaimType = "WRONG_RECIPIENT"
+)
+
+const (
+	ParcelClaimStatusOpen     ParcelClaimStatus = "OPEN"
+	ParcelClaimStatusInReview ParcelClaimStatus = "IN_REVIEW"
+	ParcelClaimStatusResolved ParcelClaimStatus = "RESOLVED"
+	ParcelClaimStatusRejected ParcelClaimStatus = "REJECTED"
+)
+
+// ParcelClaim captures a dispute/claim raised against a parcel (admin-only for MVP).
+type ParcelClaim struct {
+	ID               uuid.UUID         `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	ParcelID         uuid.UUID         `gorm:"type:uuid;not null;index" json:"parcel_id"`
+	CreatedByAdminID uuid.UUID         `gorm:"type:uuid;not null;index" json:"created_by_admin_id"`
+	Type             ParcelClaimType   `gorm:"size:30;not null" json:"type"`
+	Status           ParcelClaimStatus `gorm:"size:30;not null;default:'OPEN'" json:"status"`
+	Description      string            `gorm:"type:text;not null" json:"description"`
+	ResolutionNotes  string            `gorm:"type:text" json:"resolution_notes"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+}
+
 type BookParcelRequest struct {
 	RouteID       string  `json:"route_id"`
 	ReceiverPhone string  `json:"receiver_phone"`

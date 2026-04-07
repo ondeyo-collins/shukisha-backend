@@ -60,8 +60,23 @@ func (h *AdminHandler) GetParcels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	q := r.URL.Query().Get("q")
 	status := r.URL.Query().Get("status")
-	ps, err := h.service.GetParcels(r.Context(), status)
+	routeID := r.URL.Query().Get("route_id")
+	driverID := r.URL.Query().Get("driver_id")
+	limit := parseInt(r.URL.Query().Get("limit"), 50)
+	offset := parseInt(r.URL.Query().Get("offset"), 0)
+	slaHours := parseInt(r.URL.Query().Get("sla_hours"), 8)
+
+	ps, err := h.service.GetParcels(r.Context(), GetParcelsParams{
+		Status:   status,
+		Query:    q,
+		RouteID:  routeID,
+		DriverID: driverID,
+		Limit:    limit,
+		Offset:   offset,
+		SLAHours: slaHours,
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -69,6 +84,133 @@ func (h *AdminHandler) GetParcels(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ps)
+}
+
+func (h *AdminHandler) GetParcelExceptions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	slaHours := parseInt(r.URL.Query().Get("sla_hours"), 8)
+	limit := parseInt(r.URL.Query().Get("limit"), 50)
+	offset := parseInt(r.URL.Query().Get("offset"), 0)
+
+	ps, err := h.service.GetParcelExceptions(r.Context(), slaHours, limit, offset)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(ps)
+}
+
+func (h *AdminHandler) ListClaims(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	status := r.URL.Query().Get("status")
+	claimType := r.URL.Query().Get("type")
+	limit := parseInt(r.URL.Query().Get("limit"), 50)
+	offset := parseInt(r.URL.Query().Get("offset"), 0)
+
+	claims, err := h.service.ListClaims(r.Context(), ListClaimsParams{
+		Status: status,
+		Type:   claimType,
+		Limit:  limit,
+		Offset: offset,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(claims)
+}
+
+func (h *AdminHandler) ParcelClaims(w http.ResponseWriter, r *http.Request) {
+	// /v1/admin/parcels/{id}/claims
+	adminID, ok := r.Context().Value(AdminIDKey).(uuid.UUID)
+	if !ok {
+		http.Error(w, "Unauthorized: missing admin ID", http.StatusUnauthorized)
+		return
+	}
+
+	parcelID, ok := extractID(r.URL.Path, "/v1/admin/parcels/", "/claims")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		claims, err := h.service.ListParcelClaims(r.Context(), parcelID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(claims)
+	case http.MethodPost:
+		var req struct {
+			Type        string `json:"type"`
+			Description string `json:"description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		created, err := h.service.CreateParcelClaim(r.Context(), parcelID, adminID, req.Type, req.Description)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(created)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *AdminHandler) UpdateClaim(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	adminID, ok := r.Context().Value(AdminIDKey).(uuid.UUID)
+	if !ok {
+		http.Error(w, "Unauthorized: missing admin ID", http.StatusUnauthorized)
+		return
+	}
+
+	claimID, ok := extractID(r.URL.Path, "/v1/admin/claims/", "")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	var req struct {
+		Status          string `json:"status"`
+		ResolutionNotes string `json:"resolution_notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.service.UpdateClaimStatus(r.Context(), claimID, adminID, req.Status, req.ResolutionNotes); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "Updated"})
 }
 
 func (h *AdminHandler) GetParcelDetail(w http.ResponseWriter, r *http.Request) {
@@ -236,6 +378,20 @@ func extractID(path, prefix, suffix string) (string, bool) {
 		return "", false
 	}
 	return idPart, true
+}
+
+func parseInt(raw string, fallback int) int {
+	if raw == "" {
+		return fallback
+	}
+	var n int
+	for _, c := range raw {
+		if c < '0' || c > '9' {
+			return fallback
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
 
 // Transport Admins

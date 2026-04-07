@@ -43,6 +43,7 @@ func main() {
 		&parcels.ParcelTrackingEvent{},
 		&parcels.Payment{},
 		&parcels.ParcelNote{},
+		&parcels.ParcelClaim{},
 		&admin.AdminUser{},
 		&admin.AdminCredential{},
 		&admin.AuditEvent{},
@@ -182,11 +183,14 @@ func main() {
 	})
 
 	http.HandleFunc("/v1/admin/parcels", admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.GetParcels))
+	http.HandleFunc("/v1/admin/parcels/exceptions", admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.GetParcelExceptions))
 	http.HandleFunc("/v1/admin/parcels/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/override") {
 			admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.OverrideParcel)(w, r)
 		} else if strings.HasSuffix(r.URL.Path, "/events") {
 			admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.GetParcelEvents)(w, r)
+		} else if strings.HasSuffix(r.URL.Path, "/claims") {
+			admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.ParcelClaims)(w, r)
 		} else if strings.HasSuffix(r.URL.Path, "/notes") {
 			admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.AddParcelNote)(w, r)
 		} else if strings.HasSuffix(r.URL.Path, "/notify-driver") {
@@ -197,6 +201,9 @@ func main() {
 			http.NotFound(w, r)
 		}
 	})
+
+	http.HandleFunc("/v1/admin/claims", admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.ListClaims))
+	http.HandleFunc("/v1/admin/claims/", admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.UpdateClaim))
 
 	http.HandleFunc("/v1/admin/fleet/live", admin.RequireAnyRole(db.DB, admin.RoleTransport)(adminHandler.GetLiveFleet))
 	http.HandleFunc("/v1/admin/routes", admin.RequireAnyRole(db.DB, admin.RoleTransport)(func(w http.ResponseWriter, r *http.Request) {

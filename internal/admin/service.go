@@ -42,6 +42,10 @@ type AdminParcelSummary struct {
 	CreatedAt     time.Time            `json:"created_at"`
 	UpdatedAt     time.Time            `json:"updated_at"`
 	Payment       *AdminPaymentSummary `json:"payment,omitempty"`
+	LastEventAt   *time.Time           `json:"last_event_at,omitempty"`
+	LastEventType string               `json:"last_event_type,omitempty"`
+	AgeMinutes    int                  `json:"age_minutes"`
+	SlaBreached   bool                 `json:"sla_breached"`
 }
 
 type AdminParcelDetail struct {
@@ -70,6 +74,7 @@ func parcelToAdminSummary(p parcels.Parcel) AdminParcelSummary {
 		CreatedAt:     p.CreatedAt,
 		UpdatedAt:     p.UpdatedAt,
 		Payment:       pay,
+		AgeMinutes:    int(time.Since(p.CreatedAt).Minutes()),
 	}
 }
 
@@ -95,20 +100,121 @@ func (s *AdminService) UpdateDriverStatus(ctx context.Context, driverID string, 
 	return s.db.Model(&drivers.DriverProfile{}).Where("id = ?", driverID).Update("status", status).Error
 }
 
-func (s *AdminService) GetParcels(ctx context.Context, status string) ([]AdminParcelSummary, error) {
+type GetParcelsParams struct {
+	Status   string
+	Query    string
+	RouteID  string
+	DriverID string
+	Limit    int
+	Offset   int
+	SLAHours int
+}
+
+func (s *AdminService) GetParcels(ctx context.Context, params GetParcelsParams) ([]AdminParcelSummary, error) {
 	var results []parcels.Parcel
 	query := s.db.WithContext(ctx).Model(&parcels.Parcel{}).Preload("Payment")
-	if status != "" {
-		query = query.Where("status = ?", status)
+	if params.Status != "" {
+		query = query.Where("status = ?", params.Status)
 	}
-	err := query.Order("created_at desc").Find(&results).Error
+	if params.RouteID != "" {
+		query = query.Where("route_id = ?", params.RouteID)
+	}
+	if params.DriverID != "" {
+		query = query.Where("driver_id = ?", params.DriverID)
+	}
+	if q := strings.TrimSpace(params.Query); q != "" {
+		query = query.Where("CAST(id AS TEXT) ILIKE ? OR receiver_phone ILIKE ?", q+"%", "%"+q+"%")
+	}
+	limit := params.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	offset := params.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	err := query.Order("created_at desc").Limit(limit).Offset(offset).Find(&results).Error
+	if err != nil {
+		return nil, err
+	}
+
+	// Load last tracking event per parcel (best-effort; does not fail the list response).
+	type lastEventRow struct {
+		ParcelID  uuid.UUID `gorm:"column:parcel_id"`
+		EventType string    `gorm:"column:event_type"`
+		CreatedAt time.Time `gorm:"column:created_at"`
+	}
+	lastByParcel := map[uuid.UUID]lastEventRow{}
+	if len(results) > 0 {
+		ids := make([]uuid.UUID, 0, len(results))
+		for _, p := range results {
+			ids = append(ids, p.ID)
+		}
+
+		var rows []lastEventRow
+		_ = s.db.WithContext(ctx).Raw(`
+			SELECT DISTINCT ON (parcel_id) parcel_id, event_type, created_at
+			FROM parcel_tracking_events
+			WHERE parcel_id IN ?
+			ORDER BY parcel_id, created_at DESC
+		`, ids).Scan(&rows).Error
+
+		for _, r := range rows {
+			lastByParcel[r.ParcelID] = r
+		}
+	}
+
+	slaHours := params.SLAHours
+	if slaHours <= 0 {
+		slaHours = 8
+	}
+
+	out := make([]AdminParcelSummary, 0, len(results))
+	for _, p := range results {
+		summary := parcelToAdminSummary(p)
+		if le, ok := lastByParcel[p.ID]; ok {
+			summary.LastEventAt = &le.CreatedAt
+			summary.LastEventType = le.EventType
+		}
+		summary.SlaBreached = time.Since(p.CreatedAt) >= time.Duration(slaHours)*time.Hour && p.Status != "DELIVERED"
+		out = append(out, summary)
+	}
+	return out, nil
+}
+
+func (s *AdminService) GetParcelExceptions(ctx context.Context, slaHours int, limit int, offset int) ([]AdminParcelSummary, error) {
+	if slaHours <= 0 {
+		slaHours = 8
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	cutoff := time.Now().Add(-time.Duration(slaHours) * time.Hour)
+
+	var results []parcels.Parcel
+	err := s.db.WithContext(ctx).
+		Model(&parcels.Parcel{}).
+		Preload("Payment").
+		Where("status <> ?", "DELIVERED").
+		Where("created_at <= ?", cutoff).
+		Order("created_at asc").
+		Limit(limit).
+		Offset(offset).
+		Find(&results).Error
 	if err != nil {
 		return nil, err
 	}
 
 	out := make([]AdminParcelSummary, 0, len(results))
 	for _, p := range results {
-		out = append(out, parcelToAdminSummary(p))
+		summary := parcelToAdminSummary(p)
+		summary.SlaBreached = true
+		out = append(out, summary)
 	}
 	return out, nil
 }
@@ -232,6 +338,119 @@ func (s *AdminService) OverrideParcel(ctx context.Context, parcelID string, admi
 			Action:   "PARCEL_OVERRIDE_DELIVERED",
 			EntityID: parcel.ID.String(),
 			Details:  reason,
+		}).Error
+	})
+}
+
+func (s *AdminService) CreateParcelClaim(ctx context.Context, parcelID string, adminID uuid.UUID, claimType string, description string) (*parcels.ParcelClaim, error) {
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return nil, errors.New("description is required")
+	}
+	claimType = strings.TrimSpace(strings.ToUpper(claimType))
+	switch claimType {
+	case string(parcels.ParcelClaimTypeLost),
+		string(parcels.ParcelClaimTypeDamaged),
+		string(parcels.ParcelClaimTypeDelayed),
+		string(parcels.ParcelClaimTypeWrongRecipient):
+	default:
+		return nil, errors.New("invalid claim type")
+	}
+
+	var created parcels.ParcelClaim
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var parcel parcels.Parcel
+		if err := tx.First(&parcel, "id = ?", parcelID).Error; err != nil {
+			return err
+		}
+
+		created = parcels.ParcelClaim{
+			ParcelID:         parcel.ID,
+			CreatedByAdminID: adminID,
+			Type:             parcels.ParcelClaimType(claimType),
+			Status:           parcels.ParcelClaimStatusOpen,
+			Description:      description,
+		}
+		if err := tx.Create(&created).Error; err != nil {
+			return err
+		}
+
+		return tx.Create(&AuditEvent{
+			AdminID:  adminID,
+			Action:   "PARCEL_CLAIM_CREATE",
+			EntityID: created.ID.String(),
+			Details:  "parcel_id=" + parcel.ID.String() + " type=" + claimType,
+		}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &created, nil
+}
+
+func (s *AdminService) ListParcelClaims(ctx context.Context, parcelID string) ([]parcels.ParcelClaim, error) {
+	var claims []parcels.ParcelClaim
+	err := s.db.WithContext(ctx).Where("parcel_id = ?", parcelID).Order("created_at desc").Find(&claims).Error
+	return claims, err
+}
+
+type ListClaimsParams struct {
+	Status string
+	Type   string
+	Limit  int
+	Offset int
+}
+
+func (s *AdminService) ListClaims(ctx context.Context, params ListClaimsParams) ([]parcels.ParcelClaim, error) {
+	var claims []parcels.ParcelClaim
+	query := s.db.WithContext(ctx).Model(&parcels.ParcelClaim{})
+	if params.Status != "" {
+		query = query.Where("status = ?", strings.ToUpper(params.Status))
+	}
+	if params.Type != "" {
+		query = query.Where("type = ?", strings.ToUpper(params.Type))
+	}
+	limit := params.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	offset := params.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	err := query.Order("created_at desc").Limit(limit).Offset(offset).Find(&claims).Error
+	return claims, err
+}
+
+func (s *AdminService) UpdateClaimStatus(ctx context.Context, claimID string, adminID uuid.UUID, status string, resolutionNotes string) error {
+	status = strings.TrimSpace(strings.ToUpper(status))
+	switch status {
+	case string(parcels.ParcelClaimStatusOpen),
+		string(parcels.ParcelClaimStatusInReview),
+		string(parcels.ParcelClaimStatusResolved),
+		string(parcels.ParcelClaimStatusRejected):
+	default:
+		return errors.New("invalid claim status")
+	}
+
+	resolutionNotes = strings.TrimSpace(resolutionNotes)
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var claim parcels.ParcelClaim
+		if err := tx.First(&claim, "id = ?", claimID).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Model(&parcels.ParcelClaim{}).
+			Where("id = ?", claim.ID).
+			Updates(map[string]any{"status": parcels.ParcelClaimStatus(status), "resolution_notes": resolutionNotes}).Error; err != nil {
+			return err
+		}
+
+		return tx.Create(&AuditEvent{
+			AdminID:  adminID,
+			Action:   "PARCEL_CLAIM_UPDATE",
+			EntityID: claim.ID.String(),
+			Details:  "status=" + status,
 		}).Error
 	})
 }
