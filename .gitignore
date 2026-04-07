@@ -3,3 +3,4 @@
 .gocache/
 .gomodcache/
 .gotmp/
+.env.docker

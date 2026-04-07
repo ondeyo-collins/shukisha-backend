@@ -28,9 +28,11 @@ func main() {
 		log.Fatalf("missing required flags: --email and --name")
 	}
 
+
 	if !admin.IsCanonicalAdminRole(*role) {
 		log.Fatalf("invalid role %q (allowed: SUPER_ADMIN, LOGISTICS, TRANSPORT, FINANCE, SUPPORT)", *role)
 	}
+
 
 	pass := *password
 	if pass == "" {
