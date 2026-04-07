@@ -6,8 +6,10 @@ import (
 	"log"
 	"time"
 
+	"github.com/shukisha/backend/internal/parcels"
 	"github.com/shukisha/backend/internal/platform/cache"
 	"github.com/shukisha/backend/internal/platform/db"
+	"github.com/shukisha/backend/internal/platform/sms"
 	"github.com/shukisha/backend/internal/stopalerts"
 )
 
@@ -26,19 +28,27 @@ func main() {
 
 	// Initialize Alert Service
 	alertService := stopalerts.NewStopAlertService(db.DB)
+	smsProvider := sms.NewTwilioProvider()
+	notifyService := parcels.NewNotificationService(db.DB, smsProvider)
 
 	ctx := context.Background()
 
 	// Proximity Check Loop
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+	proximityTicker := time.NewTicker(5 * time.Second)
+	notifyTicker := time.NewTicker(10 * time.Second)
+	defer proximityTicker.Stop()
+	defer notifyTicker.Stop()
 
 	for {
 		select {
-		case <-ticker.C:
+		case <-proximityTicker.C:
 			fmt.Println("Worker processing proximity checks...")
 			if err := alertService.ProcessProximity(ctx); err != nil {
 				fmt.Printf("Error processing proximity: %v\n", err)
+			}
+		case <-notifyTicker.C:
+			if err := notifyService.ProcessOnce(ctx, 20); err != nil {
+				fmt.Printf("Error processing notifications: %v\n", err)
 			}
 		}
 	}

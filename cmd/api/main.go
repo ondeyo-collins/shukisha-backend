@@ -45,6 +45,7 @@ func main() {
 		&parcels.ParcelNote{},
 		&parcels.ParcelClaim{},
 		&parcels.ParcelClaimAttachment{},
+		&parcels.NotificationJob{},
 		&admin.AdminUser{},
 		&admin.AdminCredential{},
 		&admin.AuditEvent{},

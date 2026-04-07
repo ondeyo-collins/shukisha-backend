@@ -376,7 +376,7 @@ func (s *AdminService) AddParcelNote(ctx context.Context, parcelID string, admin
 func (s *AdminService) NotifyParcelDriver(ctx context.Context, parcelID string, adminID uuid.UUID, message string) error {
 	message = strings.TrimSpace(message)
 	if message == "" {
-		message = "Driver notified by admin"
+		message = "Action required: Please check the assigned parcel and update its delivery status in the app."
 	}
 
 	return s.db.Transaction(func(tx *gorm.DB) error {
@@ -386,6 +386,26 @@ func (s *AdminService) NotifyParcelDriver(ctx context.Context, parcelID string, 
 		}
 		if parcel.DriverID == nil {
 			return errors.New("parcel has no assigned driver")
+		}
+
+		var driver identity.User
+		if err := tx.First(&driver, "id = ?", *parcel.DriverID).Error; err != nil {
+			return errors.New("driver user not found")
+		}
+
+		job := parcels.NotificationJob{
+			Channel:          "SMS",
+			To:               driver.PhoneNumber,
+			Message:          message,
+			Status:           "QUEUED",
+			Attempts:         0,
+			MaxAttempts:      5,
+			NextAttemptAt:    time.Now(),
+			ParcelID:         &parcel.ID,
+			CreatedByAdminID: &adminID,
+		}
+		if err := tx.Create(&job).Error; err != nil {
+			return err
 		}
 
 		// MVP: record an operational event. Actual notification delivery (push/SMS) comes later.
@@ -401,7 +421,7 @@ func (s *AdminService) NotifyParcelDriver(ctx context.Context, parcelID string, 
 			AdminID:  adminID,
 			Action:   "PARCEL_NOTIFY_DRIVER",
 			EntityID: parcel.ID.String(),
-			Details:  message,
+			Details:  "job_id=" + job.ID.String(),
 		}).Error
 	})
 }
