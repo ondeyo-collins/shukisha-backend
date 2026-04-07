@@ -12,14 +12,14 @@ import (
 	"github.com/shukisha/backend/internal/identity"
 	"github.com/shukisha/backend/internal/ledger"
 	"github.com/shukisha/backend/internal/parcels"
-	"github.com/shukisha/backend/internal/routes"
-	"github.com/shukisha/backend/internal/stopalerts"
 	"github.com/shukisha/backend/internal/platform/cache"
 	"github.com/shukisha/backend/internal/platform/config"
 	"github.com/shukisha/backend/internal/platform/db"
 	"github.com/shukisha/backend/internal/platform/middleware"
 	"github.com/shukisha/backend/internal/platform/sms"
 	"github.com/shukisha/backend/internal/platform/swagger"
+	"github.com/shukisha/backend/internal/routes"
+	"github.com/shukisha/backend/internal/stopalerts"
 )
 
 func main() {
@@ -42,6 +42,7 @@ func main() {
 		&parcels.Parcel{},
 		&parcels.ParcelTrackingEvent{},
 		&parcels.Payment{},
+		&parcels.ParcelNote{},
 		&admin.AdminUser{},
 		&admin.AdminCredential{},
 		&admin.AuditEvent{},
@@ -113,7 +114,7 @@ func main() {
 	http.HandleFunc("/v1/driver/session/start", identity.AuthMiddleware(driverHandler.StartSession))
 	http.HandleFunc("/v1/driver/session/stop", identity.AuthMiddleware(driverHandler.StopSession))
 	http.HandleFunc("/v1/driver/session/heartbeat", identity.AuthMiddleware(driverHandler.Heartbeat))
-	
+
 	http.HandleFunc("/v1/driver/stop-requests", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			identity.AuthMiddleware(stopAlertHandler.GetDriverAlerts)(w, r)
@@ -164,7 +165,7 @@ func main() {
 
 	// Admin Routes (Protected by Admin Middleware)
 	http.HandleFunc("/v1/admin/stats", admin.RequireAnyRole(db.DB, admin.RoleSuperAdmin, admin.RoleLogistics, admin.RoleTransport, admin.RoleFinance, admin.RoleSupport)(adminHandler.GetDashboardStats))
-	
+
 	http.HandleFunc("/v1/admin/drivers", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			admin.RequireAnyRole(db.DB, admin.RoleTransport)(adminHandler.GetDashboardStats)(w, r) // Fallback placeholder
@@ -184,6 +185,14 @@ func main() {
 	http.HandleFunc("/v1/admin/parcels/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/override") {
 			admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.OverrideParcel)(w, r)
+		} else if strings.HasSuffix(r.URL.Path, "/events") {
+			admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.GetParcelEvents)(w, r)
+		} else if strings.HasSuffix(r.URL.Path, "/notes") {
+			admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.AddParcelNote)(w, r)
+		} else if strings.HasSuffix(r.URL.Path, "/notify-driver") {
+			admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.NotifyDriver)(w, r)
+		} else if r.Method == http.MethodGet {
+			admin.RequireAnyRole(db.DB, admin.RoleLogistics)(adminHandler.GetParcelDetail)(w, r)
 		} else {
 			http.NotFound(w, r)
 		}

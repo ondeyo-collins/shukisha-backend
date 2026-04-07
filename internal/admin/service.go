@@ -3,6 +3,8 @@ package admin
 import (
 	"context"
 	"errors"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/shukisha/backend/internal/drivers"
@@ -23,6 +25,54 @@ func NewAdminService(database *gorm.DB) *AdminService {
 	return &AdminService{db: database}
 }
 
+type AdminPaymentSummary struct {
+	Amount float64 `json:"amount"`
+	Status string  `json:"status"`
+}
+
+type AdminParcelSummary struct {
+	ID            uuid.UUID            `json:"id"`
+	SenderID      uuid.UUID            `json:"sender_id"`
+	DriverID      *uuid.UUID           `json:"driver_id"`
+	ReceiverPhone string               `json:"receiver_phone"`
+	Description   string               `json:"description"`
+	DeclaredValue float64              `json:"declared_value"`
+	Status        string               `json:"status"`
+	RouteID       uuid.UUID            `json:"route_id"`
+	CreatedAt     time.Time            `json:"created_at"`
+	UpdatedAt     time.Time            `json:"updated_at"`
+	Payment       *AdminPaymentSummary `json:"payment,omitempty"`
+}
+
+type AdminParcelDetail struct {
+	Parcel         AdminParcelSummary            `json:"parcel"`
+	TrackingEvents []parcels.ParcelTrackingEvent `json:"tracking_events"`
+	Notes          []parcels.ParcelNote          `json:"notes"`
+}
+
+func parcelToAdminSummary(p parcels.Parcel) AdminParcelSummary {
+	var pay *AdminPaymentSummary
+	if p.Payment != nil {
+		pay = &AdminPaymentSummary{
+			Amount: p.Payment.Amount,
+			Status: p.Payment.Status,
+		}
+	}
+	return AdminParcelSummary{
+		ID:            p.ID,
+		SenderID:      p.SenderID,
+		DriverID:      p.DriverID,
+		ReceiverPhone: p.ReceiverPhone,
+		Description:   p.Description,
+		DeclaredValue: p.DeclaredValue,
+		Status:        p.Status,
+		RouteID:       p.RouteID,
+		CreatedAt:     p.CreatedAt,
+		UpdatedAt:     p.UpdatedAt,
+		Payment:       pay,
+	}
+}
+
 func (s *AdminService) GetStats(ctx context.Context) (*DashboardStats, error) {
 	var stats DashboardStats
 
@@ -31,7 +81,7 @@ func (s *AdminService) GetStats(ctx context.Context) (*DashboardStats, error) {
 	s.db.Model(&parcels.Parcel{}).Where("status NOT IN (?)", []string{"DELIVERED", "CANCELLED"}).Count(&stats.ActiveParcels)
 	s.db.Model(&stopalerts.StopAlert{}).Where("status = ?", "ARMED").Count(&stats.ActiveAlerts)
 	s.db.Model(&routes.Route{}).Count(&stats.TotalRoutes)
-	
+
 	s.db.Model(&parcels.Payment{}).Where("status = ?", "SUCCESS").Select("COALESCE(SUM(amount), 0)").Scan(&stats.TotalRevenue)
 
 	return &stats, nil
@@ -45,23 +95,124 @@ func (s *AdminService) UpdateDriverStatus(ctx context.Context, driverID string, 
 	return s.db.Model(&drivers.DriverProfile{}).Where("id = ?", driverID).Update("status", status).Error
 }
 
-func (s *AdminService) GetParcels(ctx context.Context, status string) ([]parcels.Parcel, error) {
+func (s *AdminService) GetParcels(ctx context.Context, status string) ([]AdminParcelSummary, error) {
 	var results []parcels.Parcel
-	query := s.db.Model(&parcels.Parcel{}).Preload("TrackingEvents").Preload("Payment")
+	query := s.db.WithContext(ctx).Model(&parcels.Parcel{}).Preload("Payment")
 	if status != "" {
 		query = query.Where("status = ?", status)
 	}
 	err := query.Order("created_at desc").Find(&results).Error
-	return results, err
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]AdminParcelSummary, 0, len(results))
+	for _, p := range results {
+		out = append(out, parcelToAdminSummary(p))
+	}
+	return out, nil
 }
 
-func (s *AdminService) OverrideParcel(ctx context.Context, parcelID string, reason string) error {
+func (s *AdminService) GetParcelDetail(ctx context.Context, parcelID string) (*AdminParcelDetail, error) {
+	var parcel parcels.Parcel
+	if err := s.db.WithContext(ctx).
+		Preload("Payment").
+		Preload("TrackingEvents", func(db *gorm.DB) *gorm.DB {
+			return db.Order("created_at asc")
+		}).
+		First(&parcel, "id = ?", parcelID).Error; err != nil {
+		return nil, err
+	}
+
+	var notes []parcels.ParcelNote
+	_ = s.db.WithContext(ctx).Where("parcel_id = ?", parcel.ID).Order("created_at desc").Find(&notes).Error
+
+	return &AdminParcelDetail{
+		Parcel:         parcelToAdminSummary(parcel),
+		TrackingEvents: parcel.TrackingEvents,
+		Notes:          notes,
+	}, nil
+}
+
+func (s *AdminService) GetParcelEvents(ctx context.Context, parcelID string) ([]parcels.ParcelTrackingEvent, error) {
+	var events []parcels.ParcelTrackingEvent
+	err := s.db.WithContext(ctx).Where("parcel_id = ?", parcelID).Order("created_at asc").Find(&events).Error
+	return events, err
+}
+
+func (s *AdminService) AddParcelNote(ctx context.Context, parcelID string, adminID uuid.UUID, note string) error {
+	note = strings.TrimSpace(note)
+	if note == "" {
+		return errors.New("note is required")
+	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var parcel parcels.Parcel
 		if err := tx.First(&parcel, "id = ?", parcelID).Error; err != nil {
 			return err
 		}
-		
+
+		newNote := parcels.ParcelNote{
+			ParcelID: parcel.ID,
+			AdminID:  adminID,
+			Note:     note,
+		}
+		if err := tx.Create(&newNote).Error; err != nil {
+			return err
+		}
+
+		return tx.Create(&AuditEvent{
+			AdminID:  adminID,
+			Action:   "PARCEL_NOTE",
+			EntityID: parcel.ID.String(),
+			Details:  note,
+		}).Error
+	})
+}
+
+func (s *AdminService) NotifyParcelDriver(ctx context.Context, parcelID string, adminID uuid.UUID, message string) error {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "Driver notified by admin"
+	}
+
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var parcel parcels.Parcel
+		if err := tx.First(&parcel, "id = ?", parcelID).Error; err != nil {
+			return err
+		}
+		if parcel.DriverID == nil {
+			return errors.New("parcel has no assigned driver")
+		}
+
+		// MVP: record an operational event. Actual notification delivery (push/SMS) comes later.
+		if err := tx.Create(&parcels.ParcelTrackingEvent{
+			ParcelID:  parcel.ID,
+			EventType: "DRIVER_NOTIFIED_BY_ADMIN",
+			Remarks:   message,
+		}).Error; err != nil {
+			return err
+		}
+
+		return tx.Create(&AuditEvent{
+			AdminID:  adminID,
+			Action:   "PARCEL_NOTIFY_DRIVER",
+			EntityID: parcel.ID.String(),
+			Details:  message,
+		}).Error
+	})
+}
+
+func (s *AdminService) OverrideParcel(ctx context.Context, parcelID string, adminID uuid.UUID, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return errors.New("reason is required")
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var parcel parcels.Parcel
+		if err := tx.First(&parcel, "id = ?", parcelID).Error; err != nil {
+			return err
+		}
+
 		parcel.Status = "DELIVERED"
 		if err := tx.Save(&parcel).Error; err != nil {
 			return err
@@ -72,7 +223,16 @@ func (s *AdminService) OverrideParcel(ctx context.Context, parcelID string, reas
 			EventType: "DELIVERED_OVERRIDE",
 			Remarks:   "Admin Override: " + reason,
 		}
-		return tx.Create(&event).Error
+		if err := tx.Create(&event).Error; err != nil {
+			return err
+		}
+
+		return tx.Create(&AuditEvent{
+			AdminID:  adminID,
+			Action:   "PARCEL_OVERRIDE_DELIVERED",
+			EntityID: parcel.ID.String(),
+			Details:  reason,
+		}).Error
 	})
 }
 
@@ -140,7 +300,7 @@ func (s *AdminService) ExecutePayouts(ctx context.Context, driverIDs []string) e
 				if err := tx.Model(&ledger.LedgerEntry{}).Where("driver_id = ? AND status = ?", driverID, "UNPAID").Update("status", "PAID").Error; err != nil {
 					return err
 				}
-				
+
 				parsedID, err := uuid.Parse(driverID)
 				if err != nil {
 					continue

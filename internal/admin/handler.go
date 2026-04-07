@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 type AdminHandler struct {
@@ -69,16 +71,135 @@ func (h *AdminHandler) GetParcels(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(ps)
 }
 
+func (h *AdminHandler) GetParcelDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	parcelID, ok := extractID(r.URL.Path, "/v1/admin/parcels/", "")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	detail, err := h.service.GetParcelDetail(r.Context(), parcelID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(detail)
+}
+
+func (h *AdminHandler) GetParcelEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	parcelID, ok := extractID(r.URL.Path, "/v1/admin/parcels/", "/events")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	events, err := h.service.GetParcelEvents(r.Context(), parcelID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(events)
+}
+
+func (h *AdminHandler) AddParcelNote(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	adminID, ok := r.Context().Value(AdminIDKey).(uuid.UUID)
+	if !ok {
+		http.Error(w, "Unauthorized: missing admin ID", http.StatusUnauthorized)
+		return
+	}
+
+	parcelID, ok := extractID(r.URL.Path, "/v1/admin/parcels/", "/notes")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	var req struct {
+		Note string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.service.AddParcelNote(r.Context(), parcelID, adminID, req.Note); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"status": "Noted"})
+}
+
+func (h *AdminHandler) NotifyDriver(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	adminID, ok := r.Context().Value(AdminIDKey).(uuid.UUID)
+	if !ok {
+		http.Error(w, "Unauthorized: missing admin ID", http.StatusUnauthorized)
+		return
+	}
+
+	parcelID, ok := extractID(r.URL.Path, "/v1/admin/parcels/", "/notify-driver")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	var req struct {
+		Message string `json:"message"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	if err := h.service.NotifyParcelDriver(r.Context(), parcelID, adminID, req.Message); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "Notified"})
+}
+
 func (h *AdminHandler) OverrideParcel(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
-	// e.g. /v1/admin/parcels/{id}/override
-	path := r.URL.Path
-	parcelID := path[len("/v1/admin/parcels/") : strings.LastIndex(path, "/override")]
-	
+
+	adminID, ok := r.Context().Value(AdminIDKey).(uuid.UUID)
+	if !ok {
+		http.Error(w, "Unauthorized: missing admin ID", http.StatusUnauthorized)
+		return
+	}
+
+	parcelID, ok := extractID(r.URL.Path, "/v1/admin/parcels/", "/override")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
 	var req struct {
 		Reason string `json:"reason"`
 	}
@@ -87,13 +208,34 @@ func (h *AdminHandler) OverrideParcel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.OverrideParcel(r.Context(), parcelID, req.Reason); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := h.service.OverrideParcel(r.Context(), parcelID, adminID, req.Reason); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "Overridden"})
+}
+
+func extractID(path, prefix, suffix string) (string, bool) {
+	if !strings.HasPrefix(path, prefix) {
+		return "", false
+	}
+	idPart := strings.TrimPrefix(path, prefix)
+	if idPart == "" {
+		return "", false
+	}
+	if suffix != "" {
+		if !strings.HasSuffix(idPart, suffix) {
+			return "", false
+		}
+		idPart = strings.TrimSuffix(idPart, suffix)
+	}
+	idPart = strings.TrimSuffix(idPart, "/")
+	if idPart == "" || strings.Contains(idPart, "/") {
+		return "", false
+	}
+	return idPart, true
 }
 
 // Transport Admins
@@ -119,10 +261,10 @@ func (h *AdminHandler) PingDriver(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	// e.g. /v1/admin/drivers/{id}/ping
 	path := r.URL.Path
-	driverID := path[len("/v1/admin/drivers/") : strings.LastIndex(path, "/ping")]
+	driverID := path[len("/v1/admin/drivers/"):strings.LastIndex(path, "/ping")]
 
 	if err := h.service.PingDriver(r.Context(), driverID); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -285,7 +427,7 @@ func (h *AdminHandler) RescueAuth(w http.ResponseWriter, r *http.Request) {
 
 	// e.g. /v1/admin/users/{id}/rescue-auth
 	path := r.URL.Path
-	userID := path[len("/v1/admin/users/") : strings.LastIndex(path, "/rescue-auth")]
+	userID := path[len("/v1/admin/users/"):strings.LastIndex(path, "/rescue-auth")]
 
 	pin, err := h.service.RescueAuth(r.Context(), userID)
 	if err != nil {
