@@ -11,6 +11,8 @@ import (
 	"github.com/shukisha/backend/internal/identity"
 	"github.com/shukisha/backend/internal/ledger"
 	"github.com/shukisha/backend/internal/parcels"
+	"github.com/shukisha/backend/internal/platform/cloudinary"
+	"github.com/shukisha/backend/internal/platform/config"
 	"github.com/shukisha/backend/internal/routes"
 	"github.com/shukisha/backend/internal/stopalerts"
 	"golang.org/x/crypto/bcrypt"
@@ -606,20 +608,34 @@ func (s *AdminService) AddClaimAttachment(ctx context.Context, claimID string, a
 		return nil, errors.New("file content is required")
 	}
 
-	var created parcels.ParcelClaimAttachment
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		var claim parcels.ParcelClaim
-		if err := tx.First(&claim, "id = ?", claimID).Error; err != nil {
-			return err
-		}
+	var claim parcels.ParcelClaim
+	if err := s.db.WithContext(ctx).First(&claim, "id = ?", claimID).Error; err != nil {
+		return nil, err
+	}
 
+	cloudName := config.GetEnv("CLOUDINARY_CLOUD_NAME", "")
+	apiKey := config.GetEnv("CLOUDINARY_API_KEY", "")
+	apiSecret := config.GetEnv("CLOUDINARY_API_SECRET", "")
+	folder := "shukisha/claims/" + claim.ID.String()
+
+	uploadRes, err := cloudinary.UploadAuthenticated(ctx, cloudName, apiKey, apiSecret, folder, fileName, mimeType, content)
+	if err != nil {
+		return nil, err
+	}
+
+	var created parcels.ParcelClaimAttachment
+	err = s.db.Transaction(func(tx *gorm.DB) error {
 		created = parcels.ParcelClaimAttachment{
-			ClaimID:           claim.ID,
-			UploadedByAdminID: adminID,
-			FileName:          fileName,
-			MimeType:          mimeType,
-			SizeBytes:         int64(len(content)),
-			Content:           content,
+			ClaimID:                claim.ID,
+			UploadedByAdminID:      adminID,
+			FileName:               fileName,
+			MimeType:               mimeType,
+			SizeBytes:              uploadRes.Bytes,
+			CloudinaryPublicID:     uploadRes.PublicID,
+			CloudinaryResourceType: uploadRes.ResourceType,
+			CloudinaryType:         uploadRes.Type,
+			CloudinaryVersion:      uploadRes.Version,
+			CloudinaryFormat:       uploadRes.Format,
 		}
 		if err := tx.Create(&created).Error; err != nil {
 			return err
@@ -629,7 +645,7 @@ func (s *AdminService) AddClaimAttachment(ctx context.Context, claimID string, a
 			AdminID:  adminID,
 			Action:   "PARCEL_CLAIM_ATTACHMENT_ADD",
 			EntityID: created.ID.String(),
-			Details:  "claim_id=" + claim.ID.String() + " file=" + fileName,
+			Details:  "claim_id=" + claim.ID.String() + " file=" + fileName + " public_id=" + uploadRes.PublicID,
 		}).Error
 	})
 	if err != nil {

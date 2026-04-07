@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/shukisha/backend/internal/platform/cloudinary"
+	"github.com/shukisha/backend/internal/platform/config"
 )
 
 type AdminHandler struct {
@@ -316,10 +318,36 @@ func (h *AdminHandler) DownloadClaimAttachment(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	cloudName := config.GetEnv("CLOUDINARY_CLOUD_NAME", "")
+	apiSecret := config.GetEnv("CLOUDINARY_API_SECRET", "")
+	signedURL, err := cloudinary.AuthenticatedURL(cloudName, apiSecret, a.CloudinaryResourceType, a.CloudinaryVersion, a.CloudinaryPublicID, a.CloudinaryFormat)
+	if err != nil {
+		http.Error(w, "Attachment delivery not configured", http.StatusInternalServerError)
+		return
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, signedURL, nil)
+	if err != nil {
+		http.Error(w, "Failed to build download request", http.StatusInternalServerError)
+		return
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, "Failed to fetch attachment", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		http.Error(w, "Attachment not available", http.StatusBadGateway)
+		return
+	}
+
 	w.Header().Set("Content-Type", a.MimeType)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+a.FileName+`"`)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(a.Content)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 func (h *AdminHandler) GetParcelDetail(w http.ResponseWriter, r *http.Request) {

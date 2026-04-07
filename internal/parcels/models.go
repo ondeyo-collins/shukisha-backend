@@ -80,7 +80,7 @@ type ParcelClaim struct {
 	UpdatedAt        time.Time         `json:"updated_at"`
 }
 
-// ParcelClaimAttachment stores evidence for a claim. MVP uses DB storage (bytea) with a small size limit.
+// ParcelClaimAttachment stores evidence for a claim. MVP uses Cloudinary (authenticated delivery).
 type ParcelClaimAttachment struct {
 	ID                uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	ClaimID           uuid.UUID `gorm:"type:uuid;not null;index" json:"claim_id"`
@@ -88,8 +88,14 @@ type ParcelClaimAttachment struct {
 	FileName          string    `gorm:"size:255;not null" json:"file_name"`
 	MimeType          string    `gorm:"size:100;not null" json:"mime_type"`
 	SizeBytes         int64     `gorm:"not null" json:"size_bytes"`
-	Content           []byte    `gorm:"type:bytea;not null" json:"-"`
-	CreatedAt         time.Time `json:"created_at"`
+
+	CloudinaryPublicID     string `gorm:"size:255;not null;index" json:"cloudinary_public_id"`
+	CloudinaryResourceType string `gorm:"size:50;not null" json:"cloudinary_resource_type"`
+	CloudinaryType         string `gorm:"size:50;not null" json:"cloudinary_type"`
+	CloudinaryVersion      int    `gorm:"not null" json:"cloudinary_version"`
+	CloudinaryFormat       string `gorm:"size:50" json:"cloudinary_format"`
+
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type BookParcelRequest struct {
