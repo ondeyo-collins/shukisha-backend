@@ -1,7 +1,13 @@
+# Environment
 .env
 .env.example
 .env.docker
+
+# Go caches
 .gocache/
 .gomodcache/
 .gotmp/
-.env.docker
+
+# Build output
+*.exe
+*.tgz

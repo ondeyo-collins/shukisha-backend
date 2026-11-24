@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/shukisha/backend/internal/admin"
 	"github.com/shukisha/backend/internal/platform/db"
@@ -16,7 +17,10 @@ func main() {
 	}
 
 	email := "admin@shukisha.co.ke"
-	password := "CHANGE_ME"
+	password := os.Getenv("SEED_ADMIN_PASSWORD")
+	if password == "" {
+		log.Fatal("SEED_ADMIN_PASSWORD must be set")
+	}
 
 	var cred admin.AdminCredential
 	err = database.Where("email = ?", email).First(&cred).Error

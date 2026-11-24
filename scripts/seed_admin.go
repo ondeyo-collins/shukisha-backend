@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/shukisha/backend/internal/admin"
 	"github.com/shukisha/backend/internal/identity"
@@ -44,7 +45,10 @@ func main() {
 	// 3. Create the Email+Password Credential
 	authSvc := admin.NewAdminAuthService(database)
 	email := "admin@shukisha.co.ke"
-	password := "CHANGE_ME"
+	password := os.Getenv("SEED_ADMIN_PASSWORD")
+	if password == "" {
+		log.Fatal("SEED_ADMIN_PASSWORD must be set")
+	}
 	name := "Super Admin"
 
 	err = authSvc.CreateAdminCredential(context.Background(), adminUser.ID, email, name, password)
@@ -52,6 +56,6 @@ func main() {
 		// If it already exists, just notify
 		fmt.Printf("Note: Admin credential for %s might already exist: %v\n", email, err)
 	} else {
-		fmt.Printf("Successfully created SUPER_ADMIN:\nEmail: %s\nPassword: %s\n", email, password)
+		fmt.Printf("Successfully created SUPER_ADMIN: %s\n", email)
 	}
 }
